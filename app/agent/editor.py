@@ -1,16 +1,26 @@
 """The editor agent: Claude reads the candidates, researches with tools, and submits a Digest.
 
-A manual tool loop (rather than the SDK's beta tool runner) so we can enforce a turn budget,
-verify every cited URL against what the agent actually saw, and bounce invalid submissions
-back to the model with specific feedback.
+A manual tool loop (rather than the SDK's beta tool runner) so we can enforce a turn and
+context budget, condense sources before they enter the conversation, verify every citation,
+and bounce invalid submissions back to the model with specific feedback.
+
+Context engineering, in short:
+- Items are referred to by short ids (c12, s3) instead of URLs, in the briefing, in tool
+  results and in citations. Code maps ids back to URLs, so the model never writes a link.
+- Articles, transcripts and comment threads are condensed by a separate small call before
+  they reach the editor, so each source adds ~200 tokens to the conversation instead of
+  1,000-12,000. The editor can still ask for the full text when it needs it.
+- A context budget stops research before any single request crosses the size where it
+  gets expensive (100K tokens on Claude Haiku 5.5).
 """
 
 from __future__ import annotations
 
-import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import anthropic
 from pydantic import ValidationError
@@ -21,12 +31,29 @@ from ..tools.fetch import FetchError, read_article
 from ..tools.hn import hn_discussion
 from ..tools.transcripts import TranscriptError, get_transcript
 from ..tools.web_search import SearchUnavailable, web_search
+from .condense import condense
 from .prompts import SYSTEM_PROMPT, build_briefing
-from .schema import Digest, inline_schema
+from .schema import Digest, strict_schema
+from .usage import UsageTracker, prompt_tokens
 
 log = logging.getLogger(__name__)
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# Models that accept the server-side refusal fallback (Claude Haiku 5.5 does not).
+FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
+# Models that accept mid-conversation {"role": "system"} messages.
+SYSTEM_MESSAGE_MODELS = {
+    "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5",
+    "claude-opus-4-8", "claude-fable-5", "claude-fable-5-1",
+}
+
+FULL_TEXT_CHARS = 8_000     # cap when the editor explicitly asks for full text
+CONDENSE_INPUT_CHARS = 24_000  # how much of a source the condenser gets to read
+UNCONDENSED_CHARS = 5_000   # cap when condensing is switched off
+HN_FOCUS = (
+    "This is a Hacker News comment thread. Summarize the main reactions: points of agreement, "
+    "the strongest criticism, and any factual corrections or first-hand accounts. No usernames."
+)
 
 
 class EditorError(RuntimeError):
@@ -37,14 +64,20 @@ TOOLS: list[dict] = [
     {
         "name": "read_article",
         "description": (
-            "Fetch a web page and return its main article text with title, author, date and site. "
-            "Use it on every story you plan to run, preferring primary sources and original reporting. "
-            "Fails on paywalled or JavaScript-only pages; when it does, try another outlet's coverage."
+            "Read a candidate (c12) or search result (s3) and get condensed notes: key facts, numbers, names, "
+            "dates, what is confirmed versus claimed, and at most one quote. Use it on every story you plan to run. "
+            "Pass `focus` to say what you need. Set `full` to true only when the notes aren't enough "
+            "(usually just the lead story); full text is much more expensive. Fails on paywalled or "
+            "JavaScript-only pages; when it does, read another outlet's coverage."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"url": {"type": "string", "description": "Full URL from the candidates or a tool result."}},
-            "required": ["url"],
+            "properties": {
+                "ref": {"type": "string", "description": "Candidate or search result id, e.g. 'c12' or 's3'."},
+                "focus": {"type": "string", "description": "Optional. What you need from this source."},
+                "full": {"type": "boolean", "description": "Optional. Return the article text instead of notes."},
+            },
+            "required": ["ref"],
             "additionalProperties": False,
         },
     },
@@ -52,8 +85,8 @@ TOOLS: list[dict] = [
         "name": "web_search",
         "description": (
             "Search the web or recent news (Brave Search). Use it to verify surprising claims, find the primary "
-            "source behind a story, get missing specifics, or check for newer developments. Returns titles, URLs, "
-            "outlets, ages and snippets. Snippets are not enough to write from; read the best result."
+            "source behind a story, get missing specifics, or check for newer developments. Returns results with "
+            "ids (s1, s2, ...), outlets, ages and snippets. Snippets are not enough to write from; read the best one."
         ),
         "input_schema": {
             "type": "object",
@@ -69,26 +102,29 @@ TOOLS: list[dict] = [
     {
         "name": "get_video_transcript",
         "description": (
-            "Get the transcript of a YouTube video (or other media URL when local transcription is enabled), "
-            "with [mm:ss] markers every two minutes. Use it on videos whose titles suggest real substance."
+            "Get condensed notes from a video candidate's transcript (what it covers, claims made, notable "
+            "segments with [mm:ss] times). Use it on videos whose titles suggest real substance."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"url": {"type": "string"}},
-            "required": ["url"],
+            "properties": {
+                "ref": {"type": "string", "description": "Candidate id of the video, e.g. 'c140'."},
+                "focus": {"type": "string", "description": "Optional. What you need from the video."},
+            },
+            "required": ["ref"],
             "additionalProperties": False,
         },
     },
     {
         "name": "hn_discussion",
         "description": (
-            "Get a Hacker News story's points and its top-ranked comments, to see how practitioners are reacting. "
-            "Use the hn_id shown on a candidate."
+            "Summarize how Hacker News commenters are reacting to a candidate that has an HN thread "
+            "(shown with 'pts' in the candidate list): agreement, criticism, corrections."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"hn_id": {"type": "string"}},
-            "required": ["hn_id"],
+            "properties": {"ref": {"type": "string", "description": "Candidate id, e.g. 'c3'."}},
+            "required": ["ref"],
             "additionalProperties": False,
         },
     },
@@ -96,14 +132,16 @@ TOOLS: list[dict] = [
         "name": "submit_digest",
         "description": (
             "Submit the finished issue. Call this exactly once when the issue is complete; the run ends when a "
-            "submission is accepted. If it returns problems, fix them and call it again."
+            "submission is accepted. Cite sources by id. If it returns problems, fix them and call it again."
         ),
-        "input_schema": inline_schema(Digest),
+        # Strict tool use constrains generation to the schema, so the issue always arrives as valid
+        # JSON. (Smaller models occasionally emit malformed JSON in a payload this size otherwise.)
+        "strict": True,
+        "input_schema": strict_schema(Digest),
     },
 ]
-for _tool in TOOLS:
-    # Large tool inputs (the whole issue) stream as they are generated; we validate them ourselves.
-    _tool["eager_input_streaming"] = True
+
+RESEARCH_TOOLS = {"read_article", "web_search", "get_video_transcript", "hn_discussion"}
 
 
 @dataclass
@@ -111,63 +149,70 @@ class EditorResult:
     digest: Digest
     turns: int
     tool_calls: dict[str, int] = field(default_factory=dict)
-    usage: dict[str, int] = field(default_factory=dict)
-    dropped_urls: list[str] = field(default_factory=list)
+    usage: dict = field(default_factory=dict)
+    dropped_refs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _Ref:
+    url: str
+    title: str = ""
+    source: str = ""
+    hn_id: str | None = None
+    kind: str = "article"
 
 
 class _Session:
-    """Holds per-run state: which URLs the agent has seen, tool call counts."""
+    """Per-run state: the id registry, tool counts, and whether research is still allowed."""
 
-    def __init__(self, candidates: list[Candidate]):
-        self.seen: set[str] = set()
+    def __init__(self, candidates: list[Candidate], client: anthropic.Anthropic, tracker: UsageTracker):
+        self.client = client
+        self.tracker = tracker
+        self.refs: dict[str, _Ref] = {}
+        self._by_url: dict[str, str] = {}
+        self._search_count = 0
+        self._lock = threading.Lock()  # parallel searches register ids concurrently
         self.tool_calls: dict[str, int] = {}
+        self.research_closed = False
         for c in candidates:
-            self._see(c.url)
-            if c.hn_id:
-                self._see(f"https://news.ycombinator.com/item?id={c.hn_id}")
+            self._register(c.id, _Ref(c.url, c.title, c.source, c.hn_id, c.kind))
 
-    def _see(self, url: str | None) -> None:
-        if url:
-            self.seen.add(normalize_url(url))
+    def _register(self, ref_id: str, ref: _Ref) -> str:
+        self.refs[ref_id] = ref
+        self._by_url.setdefault(normalize_url(ref.url), ref_id)
+        return ref_id
 
-    def known(self, url: str) -> bool:
-        return normalize_url(url) in self.seen
+    def _new_search_ref(self, ref: _Ref) -> str:
+        with self._lock:
+            existing = self._by_url.get(normalize_url(ref.url))
+            if existing:
+                return existing  # a search hit already seen keeps its id
+            self._search_count += 1
+            return self._register(f"s{self._search_count}", ref)
+
+    def resolve(self, ref_id) -> _Ref:
+        ref = self.refs.get(str(ref_id).strip()) if ref_id else None
+        if ref is None:
+            raise ValueError(f"Unknown id {ref_id!r}. Use an id from the candidate list or a search result.")
+        return ref
+
+    def _condense(self, kind: str, title, site, text: str, focus=None) -> str:
+        return condense(self.client, self.tracker, kind=kind, title=title, site=site, text=text, focus=focus)
 
     # Each tool returns (content string, is_error)
     def run(self, name: str, args: dict) -> tuple[str, bool]:
         self.tool_calls[name] = self.tool_calls.get(name, 0) + 1
+        if self.research_closed and name in RESEARCH_TOOLS:
+            return "Research is closed: the context budget is used up. Write the issue from what you have and call submit_digest.", True
         try:
             if name == "read_article":
-                data = read_article(_require(args, "url"))
-                self._see(args["url"])
-                self._see(data["url"])
-                body = data.pop("text")
-                return (
-                    json.dumps(data, ensure_ascii=False)
-                    + f"\n<article_content untrusted=\"true\">\n{body}\n</article_content>",
-                    False,
-                )
+                return self._read_article(args), False
             if name == "web_search":
-                results = web_search(_require(args, "query"), args.get("kind", "news"), args.get("freshness", "week"))
-                for r in results:
-                    self._see(r["url"])
-                if not results:
-                    return "No results. Try a different or broader query.", False
-                return json.dumps(results, ensure_ascii=False), False
+                return self._web_search(args), False
             if name == "get_video_transcript":
-                data = get_transcript(_require(args, "url"))
-                self._see(args["url"])
-                body = data.pop("text")
-                return (
-                    json.dumps(data, ensure_ascii=False)
-                    + f"\n<transcript untrusted=\"true\">\n{body}\n</transcript>",
-                    False,
-                )
+                return self._transcript(args), False
             if name == "hn_discussion":
-                data = hn_discussion(_require(args, "hn_id"))
-                self._see(data.get("url"))
-                self._see(data["discussion_url"])
-                return json.dumps(data, ensure_ascii=False), False
+                return self._hn(args), False
             return f"Unknown tool {name!r}.", True
         except (FetchError, TranscriptError, SearchUnavailable, ValueError) as exc:
             return str(exc), True
@@ -175,53 +220,103 @@ class _Session:
             log.warning("tool %s failed: %s", name, exc)
             return f"{name} failed: {type(exc).__name__}: {str(exc)[:200]}", True
 
+    def _read_article(self, args: dict) -> str:
+        ref_id = args.get("ref")
+        ref = self.resolve(ref_id)
+        want_full = bool(args.get("full")) or not settings.condense_sources
+        limit = FULL_TEXT_CHARS if args.get("full") else (UNCONDENSED_CHARS if want_full else CONDENSE_INPUT_CHARS)
+        data = read_article(ref.url, max_chars=limit)
+        header = " | ".join(x for x in [ref_id, data.get("site"), data.get("date"), data.get("title")] if x)
+        if want_full:
+            note = " (truncated)" if data["truncated"] else ""
+            return f"{header}\n<article_text untrusted=\"true\"{note}>\n{data['text']}\n</article_text>"
+        notes = self._condense("article", data.get("title"), data.get("site"), data["text"], args.get("focus"))
+        return f"{header}\n<notes>\n{notes}\n</notes>"
 
-def _require(args: dict, key: str) -> str:
-    value = args.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"Missing required argument '{key}'.")
-    return value.strip()
+    def _web_search(self, args: dict) -> str:
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("Missing required argument 'query'.")
+        results = web_search(query.strip(), args.get("kind", "news"), args.get("freshness", "week"), count=6)
+        if not results:
+            return "No results. Try a different or broader query."
+        lines = []
+        for r in results:
+            rid = self._new_search_ref(_Ref(r["url"], r["title"], r["source"]))
+            domain = urlparse(r["url"]).netloc.removeprefix("www.")
+            lines.append(f"{rid} | {domain} | {r['age'] or '?'} | {r['title']} | {r['description'][:160]}")
+        return "\n".join(lines)
+
+    def _transcript(self, args: dict) -> str:
+        ref_id = args.get("ref")
+        ref = self.resolve(ref_id)
+        data = get_transcript(ref.url)
+        if not settings.condense_sources:
+            return f"{ref_id} | {data['source']}\n<transcript untrusted=\"true\">\n{data['text'][:UNCONDENSED_CHARS]}\n</transcript>"
+        notes = self._condense("video transcript", ref.title, ref.source, data["text"], args.get("focus"))
+        return f"{ref_id} | {ref.source} | {ref.title} ({data['source']})\n<notes>\n{notes}\n</notes>"
+
+    def _hn(self, args: dict) -> str:
+        ref_id = args.get("ref")
+        ref = self.resolve(ref_id)
+        if not ref.hn_id:
+            raise ValueError(f"{ref_id} has no Hacker News thread.")
+        data = hn_discussion(ref.hn_id)
+        if not data["top_comments"]:
+            return f"{ref_id}: {data.get('points') or 0} points, no comments yet."
+        thread = "\n\n".join(c["text"] for c in data["top_comments"])
+        if not settings.condense_sources:
+            return f"{ref_id}: {data.get('points')} points\n<comments untrusted=\"true\">\n{thread[:UNCONDENSED_CHARS]}\n</comments>"
+        notes = self._condense("comment thread", data.get("title"), "Hacker News", thread, HN_FOCUS)
+        return f"{ref_id}: {data.get('points')} points, {len(data['top_comments'])} top comments\n<notes>\n{notes}\n</notes>"
 
 
 def _check_digest(raw: dict, session: _Session, attempt: int) -> tuple[Digest | None, str | None, list[str]]:
-    """Validate a submission. Returns (digest, problems_for_model, dropped_urls)."""
+    """Validate a submission and resolve its ids to URLs. Returns (digest, problems, dropped ids)."""
     try:
         digest = Digest.model_validate(raw)
     except ValidationError as exc:
         problems = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors()[:15])
         return None, f"The submission did not match the schema: {problems}", []
 
-    unknown = sorted({u for u in digest.all_urls() if not session.known(u)})
+    unknown = sorted({item.ref for item in digest.cited() if item.ref not in session.refs})
     if unknown and attempt < 2:
-        listing = "\n".join(f"- {u}" for u in unknown)
         return None, (
-            "These URLs were not in the candidate list or any tool result, so they can't be verified:\n"
-            f"{listing}\nReplace each with a URL you actually saw (read or search for one), or remove that source "
-            "or item. Then call submit_digest again with the full issue."
+            f"These ids don't exist: {', '.join(unknown)}. Cite only candidate ids (c12) or search result ids (s3) "
+            "that you were given, or remove that source or item. Then call submit_digest again with the full issue."
         ), []
-
-    if unknown:  # out of retries: strip unverifiable links rather than publish them
-        digest = _strip_unknown(digest, session)
+    if unknown:  # out of retries: drop what can't be resolved rather than publish it
+        digest = _drop_unknown(digest, session)
+    for item in digest.cited():
+        item.url = session.refs[item.ref].url
     return digest, None, unknown
 
 
-def _strip_unknown(digest: Digest, session: _Session) -> Digest:
-    digest.lead.sources = [s for s in digest.lead.sources if session.known(s.url)]
+def _drop_unknown(digest: Digest, session: _Session) -> Digest:
+    ok = lambda item: item.ref in session.refs  # noqa: E731
+    digest.lead.sources = [s for s in digest.lead.sources if ok(s)]
     for section in digest.sections:
         for story in section.stories:
-            story.sources = [s for s in story.sources if session.known(s.url)]
+            story.sources = [s for s in story.sources if ok(s)]
         section.stories = [s for s in section.stories if s.sources]
     digest.sections = [s for s in digest.sections if s.stories]
-    digest.quick_hits = [q for q in digest.quick_hits if session.known(q.url)]
-    digest.watch = [w for w in digest.watch if session.known(w.url)]
+    digest.quick_hits = [q for q in digest.quick_hits if ok(q)]
+    digest.watch = [w for w in digest.watch if ok(w)]
     if not digest.lead.sources:
-        raise EditorError("Lead story had no verifiable sources")
+        raise EditorError("Lead story had no valid sources")
     return digest
 
 
 def anthropic_client() -> anthropic.Anthropic:
     headers = {"anthropic-workspace-id": settings.anthropic_workspace_id} if settings.anthropic_workspace_id else None
     return anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=4, default_headers=headers)
+
+
+def _reminder(text: str) -> dict:
+    """A harness notice, as a system message where the model supports it."""
+    if settings.model in SYSTEM_MESSAGE_MODELS:
+        return {"role": "system", "content": text}
+    return {"role": "user", "content": text}
 
 
 def run_editor(
@@ -236,34 +331,47 @@ def run_editor(
         raise EditorError("No candidates were collected; nothing to edit")
 
     client = anthropic_client()
-    session = _Session(candidates)
+    tracker = UsageTracker()
+    session = _Session(candidates, client, tracker)
     max_turns = settings.max_agent_turns
     briefing = build_briefing(
         cadence, issue_date, candidates, recent_headlines, max_turns, search_enabled=bool(settings.brave_api_key)
     )
     messages: list[dict] = [{"role": "user", "content": briefing}]
-    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    extra: dict = {}
+    if settings.model in FALLBACK_MODELS:
+        extra = {"betas": [FALLBACK_BETA], "fallbacks": "default"}
     submit_attempts = 0
     nudges = 0
+    wrap_up_sent = False
+    bad_json_retries = 0
 
     for turn in range(1, max_turns + 1):
-        with client.beta.messages.stream(
-            model=settings.model,
-            max_tokens=64000,
-            system=[{"type": "text", "text": SYSTEM_PROMPT}],
-            tools=TOOLS,
-            messages=messages,
-            thinking={"type": "adaptive"},
-            output_config={"effort": settings.effort},
-            cache_control={"type": "ephemeral"},
-            betas=[FALLBACK_BETA],
-            fallbacks="default",
-        ) as stream:
-            response = stream.get_final_message()
+        try:
+            with client.beta.messages.stream(
+                model=settings.model,
+                max_tokens=32000,
+                system=[{"type": "text", "text": SYSTEM_PROMPT}],
+                tools=TOOLS,
+                messages=messages,
+                thinking={"type": "adaptive"},
+                output_config={"effort": settings.effort},
+                cache_control={"type": "ephemeral"},
+                **extra,
+            ) as stream:
+                response = stream.get_final_message()
+        except ValueError as exc:
+            # The SDK raises ValueError when a tool call's JSON can't be parsed at all. There is no
+            # tool_use block to answer, so re-issue the same request (anthropic.APIError is not caught).
+            bad_json_retries += 1
+            log.warning("unparseable tool input on turn %d (retry %d): %s", turn, bad_json_retries, str(exc)[:200])
+            if bad_json_retries > 2:
+                raise EditorError("Model kept producing unparseable tool input") from exc
+            continue
 
-        for key in usage:
-            usage[key] += getattr(response.usage, key, 0) or 0
-        log.info("editor turn %d: stop=%s out=%d", turn, response.stop_reason, response.usage.output_tokens)
+        tracker.add("editor", settings.model, response.usage)
+        context_size = prompt_tokens(response.usage) + (response.usage.output_tokens or 0)
+        log.info("editor turn %d: stop=%s context=%d out=%d", turn, response.stop_reason, context_size, response.usage.output_tokens)
 
         if response.stop_reason == "refusal":
             details = response.stop_details
@@ -280,6 +388,10 @@ def run_editor(
                 raise EditorError("Model stopped without submitting a digest")
             messages.append({"role": "user", "content": "You stopped without calling submit_digest. Finish the issue and submit it now."})
             continue
+
+        # Once the conversation is near the budget, close research before running more tools.
+        if context_size >= settings.context_budget_tokens:
+            session.research_closed = True
 
         results: list[dict] = []
         accepted: Digest | None = None
@@ -309,14 +421,13 @@ def run_editor(
                 results.append(result)
 
         if accepted is not None:
-            return EditorResult(accepted, turn, session.tool_calls, usage, dropped)
+            return EditorResult(accepted, turn, session.tool_calls, tracker.summary(), dropped)
 
-        remaining = max_turns - turn
-        if remaining <= 6:
-            results.append({
-                "type": "text",
-                "text": f"{remaining} turns left. Stop researching and call submit_digest with the best issue you can make from what you have.",
-            })
         messages.append({"role": "user", "content": results})
+        remaining = max_turns - turn
+        if not wrap_up_sent and (session.research_closed or remaining <= 5):
+            wrap_up_sent = True
+            why = "The context budget is used up" if session.research_closed else f"Only {remaining} turns are left"
+            messages.append(_reminder(f"{why}. Stop researching and call submit_digest with the best issue you can make from what you have."))
 
     raise EditorError(f"Turn budget of {max_turns} exhausted without an accepted digest")

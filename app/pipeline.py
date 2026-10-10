@@ -72,7 +72,9 @@ def build_edition(cadence: str, issue_date: str | None = None, force: bool = Fal
         s.execute(delete(CoveredStory).where(CoveredStory.edition_id == edition_id))
     try:
         covered_urls, recent_headlines = _recent_coverage(cadence)
-        candidates, collect_stats = collect_candidates(WINDOW_HOURS[cadence], exclude_urls=covered_urls)
+        candidates, collect_stats = collect_candidates(
+            WINDOW_HOURS[cadence], exclude_urls=covered_urls, limit=settings.candidate_limit
+        )
         log.info("collected %d candidates (%s)", len(candidates), collect_stats)
         result = run_editor(cadence, issue_date, candidates, recent_headlines)
     except Exception as exc:
@@ -92,12 +94,16 @@ def build_edition(cadence: str, issue_date: str | None = None, force: bool = Fal
             "editor_turns": result.turns,
             "tool_calls": result.tool_calls,
             "usage": result.usage,
-            "dropped_unverified_urls": result.dropped_urls,
+            "model": settings.model,
+            "dropped_unknown_refs": result.dropped_refs,
             "seconds": round(time.monotonic() - started),
         }
         for url, headline in digest.headlines():
             s.add(CoveredStory(url=url, headline=headline[:500], edition_id=edition_id))
-    log.info("edition %s ready in %ss", edition_id, round(time.monotonic() - started))
+    log.info(
+        "edition %s ready in %ss, estimated cost $%s",
+        edition_id, round(time.monotonic() - started), result.usage.get("total_cost_usd", "?"),
+    )
     return edition_id
 
 

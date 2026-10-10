@@ -25,7 +25,10 @@
         <td class="small">
           {% if e.stats %}
           {{ e.stats.get('editor_turns', '–') }} turns, {{ e.stats.get('seconds', '–') }}s<br>
-          {% set u = e.stats.get('usage', {}) %}in {{ u.get('input_tokens', 0) }} / cached {{ u.get('cache_read_input_tokens', 0) }} / out {{ u.get('output_tokens', 0) }}<br>
+          {% set u = e.stats.get('usage', {}) %}
+          {% if u.get('total_cost_usd') is not none %}<strong>${{ '%.3f' | format(u.total_cost_usd) }}</strong> · {% endif %}{{ e.stats.get('model', '') }}<br>
+          {% for role in ['editor', 'condenser'] if u.get(role) %}{% set r = u[role] %}{{ role }}: {{ r.requests }} calls, peak prompt {{ r.max_prompt_tokens }}, out {{ r.output_tokens }}<br>{% endfor %}
+          {% if 'editor' not in u and u.get('output_tokens') %}in {{ u.get('input_tokens', 0) }} / cached {{ u.get('cache_read_input_tokens', 0) }} / out {{ u.get('output_tokens', 0) }}<br>{% endif %}
           {% for k, v in e.stats.get('tool_calls', {}).items() %}{{ k }}: {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
           {% endif %}
         </td>
