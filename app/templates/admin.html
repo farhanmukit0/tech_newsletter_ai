@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Admin · {{ name }}{% endblock %}
+{% block content %}
+<section class="container admin">
+  <h1>Admin</h1>
+  <p class="muted">
+    {{ counts.confirmed }} active readers ({{ counts.daily }} daily, {{ counts.weekly }} weekly) · {{ counts.pending }} unconfirmed
+    {% if running %}<br>Running now: {{ running | join(', ') }}. Refresh to update.{% endif %}
+  </p>
+
+  <form method="post" action="/admin/build" class="admin-row">
+    <input type="hidden" name="token" value="{{ token }}">
+    <select name="cadence"><option value="daily">Daily</option><option value="weekly">Weekly</option></select>
+    <select name="send"><option value="no">Build only (preview first)</option><option value="yes">Build and send to everyone</option></select>
+    <button type="submit">Run</button>
+  </form>
+
+  <table class="admin-table">
+    <thead><tr><th>Issue</th><th>Status</th><th>Stats</th><th></th></tr></thead>
+    <tbody>
+    {% for e in editions %}
+      <tr>
+        <td>{{ e.cadence }} {{ e.issue_date }}<br><span class="muted small">No. {{ e.issue_number }}{% if e.digest %} · {{ e.digest.subject }}{% endif %}</span></td>
+        <td>{{ e.status }}{% if e.error %}<br><span class="error small">{{ e.error[:240] }}</span>{% endif %}</td>
+        <td class="small">
+          {% if e.stats %}
+          {{ e.stats.get('editor_turns', '–') }} turns, {{ e.stats.get('seconds', '–') }}s<br>
+          {% set u = e.stats.get('usage', {}) %}in {{ u.get('input_tokens', 0) }} / cached {{ u.get('cache_read_input_tokens', 0) }} / out {{ u.get('output_tokens', 0) }}<br>
+          {% for k, v in e.stats.get('tool_calls', {}).items() %}{{ k }}: {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% endif %}
+        </td>
+        <td>
+          {% if e.digest %}
+          <a href="/admin/preview/{{ e.id }}?token={{ token }}" target="_blank">HTML</a> ·
+          <a href="/admin/preview/{{ e.id }}?token={{ token }}&fmt=text" target="_blank">Text</a>
+          <form method="post" action="/admin/send/{{ e.id }}" class="inline">
+            <input type="hidden" name="token" value="{{ token }}">
+            <input name="test_email" type="email" placeholder="test address (optional)">
+            <button type="submit">{% if e.status == 'sent' %}Send to new readers{% else %}Send{% endif %}</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">No issues yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

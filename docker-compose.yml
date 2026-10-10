@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:////data/data.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - newsletter-data:/data
+    restart: unless-stopped
+
+volumes:
+  newsletter-data:

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ name }}{% endblock %}</title>
+<meta name="description" content="{{ tagline }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,700;1,6..72,400&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231b1b1b'/><text x='16' y='23' font-family='Georgia' font-size='20' font-weight='bold' fill='%23fffefb' text-anchor='middle'>K</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <div class="container topbar-inner">
+    <a class="wordmark" href="/">{{ name }}</a>
+    <nav><a href="/issues">Past issues</a><a class="nav-cta" href="/#subscribe">Subscribe</a></nav>
+  </div>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <span>{{ name }}</span>
+    <span><a href="/issues">Archive</a></span>
+  </div>
+</footer>
+</body>
+</html>

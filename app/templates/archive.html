@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Past issues · {{ name }}{% endblock %}
+{% block content %}
+<section class="container narrow">
+  <h1>Past issues</h1>
+  {% if items %}
+  <ol class="archive">
+    {% for it in items %}
+    <li>
+      <a href="/issues/{{ it.cadence }}/{{ it.date }}">{{ it.subject }}</a>
+      <span class="muted">{{ it.pretty }} · {{ it.cadence | capitalize }} No. {{ it.number }}</span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="muted">The first issue hasn't gone out yet. <a href="/#subscribe">Subscribe</a> and you'll get it.</p>
+  {% endif %}
+</section>
+{% endblock %}

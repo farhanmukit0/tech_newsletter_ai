@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Unsubscribe · {{ name }}{% endblock %}
+{% block content %}
+<section class="container narrow message">
+  <h1>Unsubscribe {{ sub.email }}?</h1>
+  <p>You'll stop getting {{ name }} straight away. If it's just too much email, the <a href="/preferences/{{ sub.token }}">weekly edition</a> might suit you better.</p>
+  <form method="post"><button type="submit">Unsubscribe</button></form>
+</section>
+{% endblock %}

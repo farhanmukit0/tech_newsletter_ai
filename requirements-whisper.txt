@@ -1,0 +1,4 @@
+# Optional: local transcription fallback for videos without captions (and podcast/media URLs).
+# Enable with WHISPER_FALLBACK=true. Needs ffmpeg on the system.
+faster-whisper>=1.0
+yt-dlp>=2024.10.0

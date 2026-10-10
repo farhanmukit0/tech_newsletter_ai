@@ -1,0 +1,59 @@
+{{ name | upper }}
+{{ issue_label }} No. {{ issue_number }} / {{ pretty_date }}
+========================================================================
+
+{{ wrap(d.intro) }}
+
+
+TOP STORY / {{ category_label(d.lead.category) | upper }}
+
+{{ wrap(d.lead.headline) }}
+
+{% for p in d.lead.paragraphs %}
+{{ wrap(p) }}
+
+{% endfor %}
+{% for s in d.lead.sources %}
+  {{ s.name }}: {{ s.url }}
+{% endfor %}
+
+{% for section in sections %}
+
+{{ section.label | upper }}
+------------------------------------------------------------------------
+{% for story in section.stories %}
+
+{{ wrap(story.headline) }}
+{{ wrap(story.summary) }}
+{% for s in story.sources %}
+  {{ s.name }}: {{ s.url }}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% if d.quick_hits %}
+
+IN BRIEF
+------------------------------------------------------------------------
+{% for q in d.quick_hits %}
+
+* {{ wrap(q.text) }}
+  {{ q.source }}: {{ q.url }}
+{% endfor %}
+{% endif %}
+{% if d.watch %}
+
+WORTH WATCHING
+------------------------------------------------------------------------
+{% for w in d.watch %}
+
+{{ w.title | tidy }} ({{ w.channel }})
+{{ wrap(w.note) }}
+  {{ w.url }}
+{% endfor %}
+{% endif %}
+
+========================================================================
+You're getting the {{ cadence }} edition of {{ name }}.
+Change sections or frequency: {{ links.preferences }}
+Read on the web: {{ links.web }}
+Unsubscribe: {{ links.unsubscribe }}

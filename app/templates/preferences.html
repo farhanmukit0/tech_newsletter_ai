@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Your settings · {{ name }}{% endblock %}
+{% block content %}
+<section class="container narrow">
+  <h1>Your settings</h1>
+  <p class="muted">Signed up as {{ sub.email }}.{% if not sub.active %} You're currently unsubscribed; saving will turn emails back on.{% endif %}</p>
+  {% if saved %}<p class="notice">Saved. Changes apply from the next issue.</p>{% endif %}
+
+  <form method="post" class="prefs">
+    <h2>How often</h2>
+    <fieldset class="cadence">
+      <label><input type="radio" name="cadence" value="daily" {% if sub.cadence == 'daily' %}checked{% endif %}> <span>Daily</span></label>
+      <label><input type="radio" name="cadence" value="weekly" {% if sub.cadence == 'weekly' %}checked{% endif %}> <span>Weekly</span> <small>Sunday roundup</small></label>
+    </fieldset>
+
+    <h2>Sections</h2>
+    <p class="muted">The top story and In brief are always included.</p>
+    <div class="checks stacked">
+      {% for key, meta in categories.items() %}
+      <label><input type="checkbox" name="categories" value="{{ key }}" {% if key in sub.categories %}checked{% endif %}>
+        <span><strong>{{ meta.label }}</strong> <small>{{ meta.blurb }}</small></span></label>
+      {% endfor %}
+    </div>
+    <button type="submit">Save settings</button>
+  </form>
+  <p class="muted small"><a href="/unsubscribe/{{ sub.token }}">Unsubscribe instead</a></p>
+</section>
+{% endblock %}

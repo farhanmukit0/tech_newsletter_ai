@@ -1,0 +1,145 @@
+:root {
+  --paper: #f6f4ef;
+  --sheet: #fffefb;
+  --ink: #1b1b1b;
+  --ink-2: #2f2c27;
+  --muted: #6f6a61;
+  --rule: #dcd7cc;
+  --accent: #a8431a;
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --sans: "Public Sans", -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.55;
+}
+a { color: inherit; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:hover { color: var(--accent); }
+
+.container { width: 100%; max-width: 1080px; margin: 0 auto; padding-left: 24px; padding-right: 24px; }
+.narrow { max-width: 640px; }
+.muted { color: var(--muted); }
+.small { font-size: 14px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Top bar */
+.topbar { border-bottom: 1px solid var(--ink); background: var(--paper); }
+.topbar-inner { display: flex; align-items: baseline; justify-content: space-between; padding-top: 18px; padding-bottom: 14px; }
+.wordmark { font-weight: 700; font-size: 26px; letter-spacing: -0.4px; text-decoration: none; }
+.topbar nav { font-family: var(--sans); font-size: 14px; display: flex; gap: 22px; }
+.topbar nav a { text-decoration: none; color: var(--muted); }
+.topbar nav a:hover { color: var(--ink); }
+.topbar nav .nav-cta { color: var(--ink); border-bottom: 1px solid var(--ink); }
+
+/* Hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 64px; padding-top: 64px; padding-bottom: 72px; align-items: start; }
+.kicker { font-family: var(--sans); font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 0 0 18px; }
+h1 { font-size: 52px; line-height: 1.06; letter-spacing: -1.2px; font-weight: 500; margin: 0 0 22px; }
+.lede { font-size: 20px; line-height: 1.55; color: var(--ink-2); margin: 0 0 32px; max-width: 34em; }
+
+/* Signup */
+.signup { max-width: 520px; }
+.signup-row { display: flex; border: 1px solid var(--ink); background: var(--sheet); }
+.signup-row input {
+  flex: 1; min-width: 0; border: 0; background: transparent; padding: 14px 16px;
+  font: 17px var(--sans); color: var(--ink); outline: none;
+}
+.signup-row input:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+button {
+  font: 600 15px var(--sans); background: var(--ink); color: var(--sheet); border: 0;
+  padding: 14px 22px; cursor: pointer; letter-spacing: 0.2px;
+}
+button:hover { background: #000; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.cadence { border: 0; padding: 0; margin: 16px 0 0; display: flex; gap: 22px; flex-wrap: wrap; font-family: var(--sans); font-size: 15px; }
+.cadence label { display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; }
+.cadence small { color: var(--muted); font-size: 13px; }
+input[type="radio"], input[type="checkbox"] { accent-color: var(--ink); }
+
+.sections-picker { margin-top: 14px; font-family: var(--sans); font-size: 15px; }
+.sections-picker summary { cursor: pointer; color: var(--ink-2); }
+.sections-picker summary small { color: var(--muted); }
+.checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; padding: 14px 0 4px; font-family: var(--sans); font-size: 15px; }
+.checks label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+.checks.stacked { grid-template-columns: 1fr; gap: 12px; }
+.checks.stacked small { display: block; color: var(--muted); font-size: 13px; }
+.fine { font-family: var(--sans); font-size: 13px; color: var(--muted); margin-top: 16px; }
+.hp { position: absolute; left: -9999px; }
+
+/* Issue preview, set like a printed page */
+.paper {
+  background: var(--sheet); border: 1px solid var(--rule); padding: 28px 30px 30px;
+  box-shadow: 0 1px 0 var(--rule), 6px 6px 0 -1px var(--paper), 6px 6px 0 0 var(--rule);
+}
+.paper-head { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 3px double var(--ink); padding-bottom: 8px; margin-bottom: 18px; }
+.paper-name { font-weight: 700; font-size: 21px; letter-spacing: -0.3px; }
+.paper-meta { font-family: var(--sans); font-size: 12px; color: var(--muted); }
+.paper-label { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; margin: 18px 0 6px; padding-top: 8px; border-top: 1px solid var(--ink); }
+.paper-label:first-of-type { border-top: 0; padding-top: 0; color: var(--accent); }
+.paper-lead { font-size: 22px; line-height: 1.2; margin: 0 0 8px; font-weight: 700; letter-spacing: -0.2px; }
+.paper-lead a, .paper-item a { text-decoration: none; }
+.paper-body { font-size: 16px; color: var(--ink-2); margin: 0; }
+.paper-item { font-size: 16px; line-height: 1.4; margin: 6px 0; }
+.paper-more { display: inline-block; margin-top: 18px; font-family: var(--sans); font-size: 14px; }
+
+/* Band */
+.band { border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule); background: var(--sheet); }
+.three-up { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 48px; padding-top: 44px; padding-bottom: 44px; }
+.three-up h3 { font-size: 21px; margin: 0 0 8px; font-weight: 700; letter-spacing: -0.2px; }
+.three-up p { margin: 0; color: var(--ink-2); font-size: 17px; }
+
+/* FAQ */
+.faq { padding-top: 56px; padding-bottom: 72px; max-width: 760px; margin-left: max(24px, calc((100% - 1080px) / 2)); }
+.faq h2 { font-size: 30px; font-weight: 500; letter-spacing: -0.4px; margin: 0 0 20px; }
+.faq dt { font-weight: 700; margin-top: 22px; }
+.faq dd { margin: 4px 0 0; color: var(--ink-2); }
+
+/* Simple pages */
+.message, section.narrow { padding-top: 56px; padding-bottom: 80px; }
+section.narrow h1, .message h1 { font-size: 38px; letter-spacing: -0.6px; }
+.prefs h2 { font-family: var(--sans); font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; margin: 30px 0 4px; border-top: 1px solid var(--ink); padding-top: 10px; }
+.prefs button { margin-top: 26px; }
+.notice { background: var(--sheet); border-left: 3px solid var(--accent); padding: 10px 14px; font-family: var(--sans); font-size: 15px; }
+.archive { list-style: none; padding: 0; margin: 0; }
+.archive li { padding: 14px 0; border-bottom: 1px solid var(--rule); display: flex; flex-direction: column; gap: 2px; }
+.archive li a { text-decoration: none; font-size: 20px; }
+.archive .muted { font-family: var(--sans); font-size: 13px; }
+
+/* Admin */
+.admin { padding-top: 40px; padding-bottom: 80px; font-family: var(--sans); font-size: 15px; }
+.admin h1 { font-family: var(--serif); }
+.admin-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 28px; }
+.admin select, .admin input { font: 14px var(--sans); padding: 10px; border: 1px solid var(--ink); background: var(--sheet); }
+.admin button { padding: 10px 16px; font-size: 14px; }
+.admin-table { width: 100%; border-collapse: collapse; }
+.admin-table th, .admin-table td { text-align: left; vertical-align: top; padding: 12px 10px 12px 0; border-bottom: 1px solid var(--rule); }
+.admin-table th { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+.admin form.inline { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.error { color: #9b1c1c; }
+
+/* Footer */
+.site-footer { border-top: 1px solid var(--ink); font-family: var(--sans); font-size: 13px; color: var(--muted); }
+.footer-inner { display: flex; justify-content: space-between; padding-top: 18px; padding-bottom: 28px; }
+
+@media (max-width: 860px) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: 44px; padding-top: 40px; }
+  h1 { font-size: 38px; letter-spacing: -0.8px; }
+  .lede { font-size: 18px; }
+  .three-up { grid-template-columns: 1fr; gap: 28px; }
+}
+@media (max-width: 480px) {
+  .container { padding-left: 16px; padding-right: 16px; }
+  .signup-row { flex-direction: column; }
+  .signup-row button { width: 100%; }
+  .checks { grid-template-columns: 1fr; }
+  .paper { padding: 22px 18px; }
+  .topbar nav { gap: 14px; }
+}

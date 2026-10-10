@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}: {{ tagline }}{% endblock %}
+{% block content %}
+<section class="hero container">
+  <div class="hero-copy">
+    <p class="kicker">A tech newsletter, daily or weekly</p>
+    <h1>What happened in tech, in one email you'll actually finish.</h1>
+    <p class="lede">
+      Every morning we go through the outlets, the company blogs, Hacker News and the videos people are
+      passing around. Most of it doesn't make the cut. What's left gets a few plain sentences each,
+      sorted into sections, with links to the original reporting.
+    </p>
+
+    <form id="subscribe" class="signup" method="post" action="/subscribe">
+      <label class="visually-hidden" for="email">Email address</label>
+      <div class="signup-row">
+        <input id="email" name="email" type="email" required autocomplete="email" placeholder="you@example.com">
+        <button type="submit">Subscribe</button>
+      </div>
+
+      <fieldset class="cadence">
+        <legend class="visually-hidden">How often</legend>
+        <label><input type="radio" name="cadence" value="daily" checked> <span>Daily</span> <small>weekday and weekend mornings</small></label>
+        <label><input type="radio" name="cadence" value="weekly"> <span>Weekly</span> <small>Sunday roundup</small></label>
+      </fieldset>
+
+      <details class="sections-picker">
+        <summary>Choose sections <small>(all by default)</small></summary>
+        <div class="checks">
+          {% for key, meta in categories.items() %}
+          <label><input type="checkbox" name="categories" value="{{ key }}" checked> {{ meta.label }}</label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <div class="hp" aria-hidden="true"><label>Website <input name="website" tabindex="-1" autocomplete="off"></label></div>
+      <p class="fine">Free. One email per edition. Unsubscribe with one click.</p>
+    </form>
+  </div>
+
+  <aside class="paper" aria-label="Latest issue preview">
+    {% if digest %}
+    <div class="paper-head">
+      <span class="paper-name">{{ name }}</span>
+      <span class="paper-meta">{{ edition_date }}</span>
+    </div>
+    <p class="paper-label">Top story</p>
+    <h2 class="paper-lead"><a href="{{ digest.lead.sources[0].url }}" rel="noopener">{{ digest.lead.headline }}</a></h2>
+    <p class="paper-body">{{ digest.lead.paragraphs[0] }}</p>
+    {% for section in digest.sections[:3] %}
+      <p class="paper-label">{{ categories[section.category].label }}</p>
+      {% for story in section.stories[:2] %}
+      <p class="paper-item"><a href="{{ story.sources[0].url }}" rel="noopener">{{ story.headline }}</a></p>
+      {% endfor %}
+    {% endfor %}
+    <a class="paper-more" href="/issues/{{ edition.cadence }}/{{ edition.issue_date }}">Read the full issue</a>
+    {% else %}
+    <div class="paper-head">
+      <span class="paper-name">{{ name }}</span>
+      <span class="paper-meta">Issue No. 1</span>
+    </div>
+    <p class="paper-label">Inside every issue</p>
+    <p class="paper-body">A short editor's note, the one story that matters most told properly, then the rest by section.</p>
+    {% for key, meta in categories.items() %}
+      <p class="paper-item"><strong>{{ meta.label }}.</strong> {{ meta.blurb }}</p>
+    {% endfor %}
+    <p class="paper-item"><strong>In brief.</strong> One-liners worth knowing.</p>
+    <p class="paper-item"><strong>Worth watching.</strong> The occasional video that earns its runtime.</p>
+    {% endif %}
+  </aside>
+</section>
+
+<section class="band">
+  <div class="container three-up">
+    <div>
+      <h3>Picky on purpose</h3>
+      <p>No deal posts, no gadget round-ups, no press releases rewritten as news. If a story won't matter by next week, it probably isn't here.</p>
+    </div>
+    <div>
+      <h3>Read, not skimmed</h3>
+      <p>Every story is checked against the original source before it's written up, and every one links to the reporting it came from.</p>
+    </div>
+    <div>
+      <h3>Your sections only</h3>
+      <p>Don't care about chips or space? Turn those sections off. Switch between daily and weekly whenever you like.</p>
+    </div>
+  </div>
+</section>
+
+<section class="container faq">
+  <h2>Questions</h2>
+  <dl>
+    <dt>How is each issue put together?</dt>
+    <dd>Collectors pull a few hundred recent items from about twenty outlets, Hacker News, Reddit and a handful of YouTube channels. An editor working with AI tools reads the shortlist, checks the sources, transcribes the videos that look substantive, and writes up what made the cut.</dd>
+    <dt>What does it cost?</dt>
+    <dd>Nothing.</dd>
+    <dt>What do you do with my email address?</dt>
+    <dd>Send you the newsletter. That's it. We don't sell or share it.</dd>
+    <dt>Can I change my mind about frequency or sections?</dt>
+    <dd>Yes. Every issue has a link at the bottom to change your settings or unsubscribe.</dd>
+  </dl>
+</section>
+{% endblock %}
