@@ -5,15 +5,21 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from ..categories import CATEGORY_KEYS
 
 CategoryKey = Literal[tuple(CATEGORY_KEYS)]  # type: ignore[valid-type]
 
 
+REF_HELP = "Reference id of the piece: a candidate id like 'c12' or a search result id like 's3'."
+
+
 class SourceRef(BaseModel):
-    name: str = Field(description="Publication name as readers know it, e.g. 'The Verge', 'Ars Technica', 'Hacker News'.")
-    url: str = Field(description="Exact URL of the piece. Must be a URL you saw in the candidate list or in a tool result.")
+    name: str = Field(description="Name of the publication or organization that published the linked page (judge by its domain), e.g. 'The Verge', 'Cloudflare'. Not the aggregator it surfaced on: use 'Hacker News' only for an HN discussion page.")
+    ref: str = Field(description=REF_HELP)
+    # Filled in by code from the ref after validation; never written by the model.
+    url: SkipJsonSchema[str] = ""
 
 
 class Story(BaseModel):
@@ -43,15 +49,17 @@ class Section(BaseModel):
 
 class QuickHit(BaseModel):
     text: str = Field(description="One sentence, a complete thought, no trailing ellipsis.")
-    url: str
+    ref: str = Field(description=REF_HELP)
     source: str
+    url: SkipJsonSchema[str] = ""
 
 
 class WatchItem(BaseModel):
     title: str = Field(description="The video's title, lightly cleaned up (no clickbait caps or emoji).")
-    url: str
+    ref: str = Field(description="Candidate id of the video, e.g. 'c140'.")
     channel: str
     note: str = Field(description="1-2 sentences on what the video actually covers and who it is worth the time for, from the transcript.")
+    url: SkipJsonSchema[str] = ""
 
 
 class Digest(BaseModel):
@@ -63,14 +71,15 @@ class Digest(BaseModel):
     quick_hits: list[QuickHit] = Field(default_factory=list)
     watch: list[WatchItem] = Field(default_factory=list)
 
-    def all_urls(self) -> list[str]:
-        urls = [s.url for s in self.lead.sources]
+    def cited(self) -> list[SourceRef | QuickHit | WatchItem]:
+        """Every object that carries a ref (and, once resolved, a url)."""
+        items: list = list(self.lead.sources)
         for section in self.sections:
             for story in section.stories:
-                urls.extend(s.url for s in story.sources)
-        urls.extend(q.url for q in self.quick_hits)
-        urls.extend(w.url for w in self.watch)
-        return urls
+                items.extend(story.sources)
+        items.extend(self.quick_hits)
+        items.extend(self.watch)
+        return items
 
     def headlines(self) -> list[tuple[str, str]]:
         """(url, headline) pairs for everything that ran, for de-duplicating future issues."""
@@ -107,3 +116,24 @@ def inline_schema(model: type[BaseModel]) -> dict:
         return node
 
     return resolve(schema)
+
+
+def strict_schema(model: type[BaseModel]) -> dict:
+    """inline_schema() made valid for strict tool use: every object closed, every property required."""
+
+    def close(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+                node["required"] = list(node["properties"].keys())
+            for value in node.values():
+                close(value)
+        elif isinstance(node, list):
+            for value in node:
+                close(value)
+        return node
+
+    schema = close(inline_schema(model))
+    for prop in schema["properties"].values():
+        prop.pop("default", None)  # defaults are meaningless once every field is required
+    return schema

@@ -31,9 +31,16 @@ class Settings:
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
     # Needed only for keys that aren't scoped to a single workspace.
     anthropic_workspace_id: str | None = os.getenv("ANTHROPIC_WORKSPACE_ID") or None
-    model: str = os.getenv("EDITOR_MODEL", "claude-opus-5-5")
-    effort: str = os.getenv("EDITOR_EFFORT", "high")
-    max_agent_turns: int = int(os.getenv("MAX_AGENT_TURNS", "60"))
+    model: str = os.getenv("EDITOR_MODEL", "claude-haiku-5-5")
+    effort: str = os.getenv("EDITOR_EFFORT", "medium")
+    max_agent_turns: int = int(os.getenv("MAX_AGENT_TURNS", "40"))
+    # Model that condenses each article/transcript into short notes before the editor sees it.
+    condenser_model: str = os.getenv("CONDENSER_MODEL", "claude-haiku-5-5")
+    condense_sources: bool = _bool("CONDENSE_SOURCES", True)
+    # Stop research once a single request's prompt reaches this size. Haiku 5.5 bills prompts
+    # over 100K tokens at 5x the rate, so stay comfortably below that.
+    context_budget_tokens: int = int(os.getenv("CONTEXT_BUDGET_TOKENS", "80000"))
+    candidate_limit: int = int(os.getenv("CANDIDATE_LIMIT", "120"))
 
     # Search
     brave_api_key: str | None = os.getenv("BRAVE_API_KEY")

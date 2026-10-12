@@ -29,24 +29,28 @@ Each issue goes through three stages:
 1. **Collect.** Deterministic, cheap code gathers a few hundred recent items from RSS feeds, Hacker
    News, Reddit and YouTube. It drops junk (deal posts, gift guides, quiz hints), merges the same
    story from different outlets, removes stories already covered in recent issues, and ranks what's
-   left. About 150–180 candidates go forward.
-2. **Edit.** Claude (Opus 5.5 by default) gets the candidates plus a detailed editorial brief and
+   left. The top 120 candidates go forward.
+2. **Edit.** Claude (Haiku 5.5 by default) gets the candidates plus a detailed editorial brief and
    works like an editor:
    - It triages the list.
-   - It reads the strongest sources (about 40 articles per daily issue).
+   - It reads the strongest sources (about 30 per daily issue). Each source is condensed into
+     short notes by a separate small call before the editor sees it.
    - It searches the web to verify claims and fill gaps.
    - It transcribes promising videos.
    - It checks how Hacker News is reacting.
    - It writes the issue and submits it as structured data.
 
-   Every link it cites is checked against what it actually saw during the run.
+   It cites sources by short ids (`c12`, `s3`), and code turns those into links, so it can't
+   invent a URL.
 3. **Deliver.** The issue is stored and rendered separately for each subscriber (HTML and plain
    text), including only the sections they chose. It's sent through Resend with one-click
    unsubscribe headers.
 
-A daily issue takes about 4 minutes and costs about $1.10 in Claude usage at the default settings
-(measured on the first live run). The editor runs once per issue no matter how many subscribers
-you have, so cost doesn't grow with your list.
+A daily issue takes about 2 minutes and costs about **$0.03** in Claude usage with the defaults
+(Claude Haiku 5.5, measured on live runs). Switching the editor to Claude Opus 5.5 reads more
+sources and catches more detail, for about $1 per issue. Either way the editor runs once per
+issue no matter how many subscribers you have, so cost doesn't grow with your list. Each issue's
+estimated cost is shown on the admin page.
 
 ---
 
@@ -59,19 +63,20 @@ you have, so cost doesn't grow with your list.
   6 subreddits ─┼───────▶│  remove already-covered URLs → rank by coverage + engagement        │
   8 YouTube ────┘        │                                                                     │
   channels               └───────────────────────────────┬─────────────────────────────────────┘
-                                                         │ ~150-180 ranked candidates
+                                                         │ 120 ranked candidates (ids c1…c120)
                                                          ▼
                          ┌──────────────────────────── app/agent ─────────────────────────────┐
                          │  editor.py: tool loop with Claude                                   │
                          │    system prompt (prompts.py) + briefing with candidates            │
                          │                                                                     │
-                         │    tools (app/tools):                                               │
-                         │      read_article ────── fetch.py        (trafilatura)              │
-                         │      web_search ──────── web_search.py   (Brave Search API)         │
-                         │      get_video_transcript transcripts.py (YouTube captions/Whisper) │
-                         │      hn_discussion ───── hn.py           (HN Algolia API)           │
-                         │      submit_digest ───── validated against schema.py, every URL     │
-                         │                          checked against URLs seen this run         │
+                         │    tools (app/tools):                    condense.py (small model)  │
+                         │      read_article ────── fetch.py ─────────▶ ~150-word notes        │
+                         │      web_search ──────── web_search.py   (Brave; results s1, s2…)   │
+                         │      get_video_transcript transcripts.py ──▶ ~150-word notes        │
+                         │      hn_discussion ───── hn.py ────────────▶ ~150-word notes        │
+                         │      submit_digest ───── strict schema (schema.py); cited ids are   │
+                         │                          checked and resolved to URLs               │
+                         │    usage.py: tokens + estimated cost for every call                 │
                          └───────────────────────────────┬─────────────────────────────────────┘
                                                          │ Digest (JSON)
                                                          ▼
@@ -92,9 +97,10 @@ you have, so cost doesn't grow with your list.
 - **One shared issue per day, personalized at render time.** The agent writes one digest per
   cadence and date. Section filtering happens when each email is rendered, so 10 or 10,000
   subscribers cost the same in model usage.
-- **Links are verified, not trusted.** The editor tracks every URL that appeared in the candidates
-  or in a tool result. A submission citing any other URL is sent back with the list of unknown
-  links. After two failed attempts, those links are removed rather than published.
+- **The model never writes a URL.** Candidates get ids (`c1`…), search results get ids (`s1`…),
+  and the editor cites those. Code maps ids to URLs. An id that doesn't exist is sent back for
+  correction, and after two failed attempts it's removed rather than published.
+- **Context is engineered to stay small.** See [Cost and context engineering](#cost-and-context-engineering).
 - **Fetched content is treated as untrusted.** Article text and transcripts are wrapped in
   `untrusted="true"` tags, and the system prompt tells the model to report on page content, never
   follow instructions in it.
@@ -105,20 +111,57 @@ you have, so cost doesn't grow with your list.
   on (edition, subscriber), and the scheduler won't start a job that's already running. If the
   process dies after building but before sending, the next run sends the existing issue.
 
+### Cost and context engineering
+
+Every turn of the editor re-reads the whole conversation, so cost is driven by how big the
+conversation gets and how many turns it takes. Measured on the same day's news:
+
+| | Before (Opus 5.5, raw sources) | After (Haiku 5.5, condensed) |
+|---|---|---|
+| Estimated cost per daily issue | ~$1.06 | ~$0.025 |
+| Peak prompt size | ~100K tokens | ~35K tokens |
+| Editor turns | 9 | 4 |
+| Run time | ~4 min | ~2 min |
+
+What keeps it small:
+
+1. **Condensed sources** (`app/agent/condense.py`). An article added 1,000–1,700 tokens to the
+   conversation, and a video transcript about 12,000. Now each source goes through one
+   independent Haiku call (effort `low`) that returns about 150 words of facts, aimed at the
+   `focus` the editor asked for. The editor can still ask for `full` text when notes aren't
+   enough, typically for the lead.
+2. **Ids instead of URLs.** The briefing shows a short id and the domain for each candidate
+   instead of the full URL, and citations use the ids. That saves tokens in both directions.
+3. **A compact briefing.** 120 candidates instead of ~180, one line each, with only the first
+   sentence of each feed snippet. That cut the briefing from ~26K to ~9K tokens.
+4. **A context budget** (`CONTEXT_BUDGET_TOKENS`, default 80K). Once one request's prompt reaches
+   it, research tools are closed and the editor is told to submit. Claude Haiku 5.5 bills
+   prompts over 100K tokens at 5x the rate, so the budget keeps every request on the cheap rate.
+5. **Fewer, fuller turns.** The prompt asks the editor to read its whole shortlist in parallel
+   in one or two turns, because every extra turn re-reads everything.
+6. **Prompt caching.** The system prompt and tool definitions are static, so they're cached
+   across runs, and within a run each turn reads the earlier turns from cache.
+
+The tradeoff: the cheaper setup reads fewer sources and works from notes, so it sometimes misses
+a detail that only a second source carried. If that matters more than cost, set
+`EDITOR_MODEL=claude-opus-5-5` and/or `EDITOR_EFFORT=high`.
+
 ### Claude API usage
 
-- Model `claude-opus-5-5` with adaptive thinking, and effort set by `EDITOR_EFFORT` (default `high`).
-- Streaming requests (`client.beta.messages.stream(...).get_final_message()`) with
-  `max_tokens=64000`, so long tool inputs such as the whole issue never hit HTTP timeouts.
-- Server-side refusal fallback (`fallbacks="default"`, beta `server-side-fallback-2026-07-01`):
-  if a request is declined, the API retries it on a fallback model inside the same call.
-- Automatic prompt caching (`cache_control` on every request). The system prompt is static, with
-  no dates, so it's cached across runs. Within a run, the growing conversation is cached turn to
-  turn, and most input tokens are cache reads.
-- The conversation is append-only. Earlier turns are never edited, which keeps the cache and
-  thinking blocks valid.
-- Large tool inputs stream as they're generated (`eager_input_streaming`), so the code validates
-  them itself: `submit_digest` with pydantic, the other tools by checking required arguments.
+- Editor: `EDITOR_MODEL` (default `claude-haiku-5-5`) with adaptive thinking and
+  `EDITOR_EFFORT` (default `medium`). Condenser: `CONDENSER_MODEL` at effort `low`.
+- Streaming requests (`client.beta.messages.stream(...).get_final_message()`), so the long
+  final turn that writes the whole issue never hits an HTTP timeout.
+- `submit_digest` uses strict tool use (`strict: true`), which constrains generation to the
+  schema, so the issue always arrives as valid JSON. The result is still validated with
+  pydantic, and if the SDK ever can't parse a tool call, the request is retried (up to twice).
+- Server-side refusal fallback (`fallbacks="default"`) is sent only for models that support it
+  (Opus 5.5, Opus 5, Sonnet 5.5, Fable 5.1). Claude Haiku 5.5 doesn't, so its refusals end the
+  run with an error.
+- Harness reminders ("turns left", "context budget used up") are sent as mid-conversation
+  `system` messages, not mixed into tool results.
+- Automatic prompt caching (`cache_control` on every request), and the conversation is
+  append-only, which keeps the cache and earlier thinking blocks valid.
 
 ---
 
@@ -145,7 +188,11 @@ you have, so cost doesn't grow with your list.
 │   │   ├── prompts.py     The editor's system prompt (editorial standards, process, accuracy
 │   │   │                  rules, voice, banned phrases) and build_briefing(), which formats the
 │   │   │                  per-issue message: date, targets, recently covered stories, candidates.
-│   │   ├── editor.py      The agent loop: tool definitions, running tool calls in parallel,
+│   │   ├── condense.py    Turns one article, transcript or comment thread into ~150 words of
+│   │   │                  notes with a small, separate model call.
+│   │   ├── usage.py       Token accounting and estimated cost per run (prices per model).
+│   │   ├── editor.py      The agent loop: tool definitions, the id registry (c12/s3 → URL),
+│   │   │                  context budget, running tool calls in parallel,
 │   │   │                  turn budget, URL verification, refusal / max_tokens handling.
 │   │   └── schema.py      Pydantic models for the issue (Digest, LeadStory, Section, Story,
 │   │                      QuickHit, WatchItem). Also produces the submit_digest tool schema.
@@ -309,9 +356,13 @@ All settings come from environment variables. Locally they're read from `.env`; 
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (none, required) | Claude API key. |
 | `ANTHROPIC_WORKSPACE_ID` | (empty) | Only for keys not scoped to a workspace. The API's error message tells you when you need it. |
-| `EDITOR_MODEL` | `claude-opus-5-5` | Model for the editor agent. |
-| `EDITOR_EFFORT` | `high` | `low`, `medium`, `high`, `xhigh` or `max`. Higher means more thorough editing and more tokens. |
-| `MAX_AGENT_TURNS` | `60` | Hard cap on editor turns per issue. Typical runs use about 9. |
+| `EDITOR_MODEL` | `claude-haiku-5-5` | Model for the editor agent. `claude-opus-5-5` is more thorough, at roughly 40x the cost. |
+| `EDITOR_EFFORT` | `medium` | `low`, `medium`, `high`, `xhigh` or `max`. Higher means more thorough editing and more tokens. |
+| `MAX_AGENT_TURNS` | `40` | Hard cap on editor turns per issue. Typical runs use 4–9. |
+| `CONDENSER_MODEL` | `claude-haiku-5-5` | Model that condenses each source into notes for the editor. |
+| `CONDENSE_SOURCES` | `true` | Set `false` to give the editor raw (truncated) text instead of notes. Costs more. |
+| `CONTEXT_BUDGET_TOKENS` | `80000` | Research stops once one request's prompt reaches this size. Keep it under 100K on Haiku 5.5. |
+| `CANDIDATE_LIMIT` | `120` | How many ranked candidates the editor chooses from. |
 | `BRAVE_API_KEY` | (empty) | Brave Search key (free tier available). Without it the editor works from the feeds and the articles it reads. Recommended. |
 | `EMAIL_BACKEND` | `console` | `console` writes emails to `outbox/`; `resend` sends them. |
 | `RESEND_API_KEY` | (empty) | Resend API key. |
@@ -428,7 +479,8 @@ Useful loops:
 - **Work on email templates:** build one issue once, then edit `app/templates/email/issue.html` and
   run `python -m app.cli preview <id>`. No model calls are needed to iterate on design.
 - **Work on the prompt:** `python -m app.cli run daily --no-send --force` rebuilds today's issue.
-  Each run costs about $1 at default settings. Compare `outbox/edition-<id>.txt` between runs.
+  Each run costs about $0.03 at default settings (about $1 with Opus). Compare
+  `outbox/edition-<id>.txt` between runs; the admin page shows each run's cost.
 - **Use a scratch database:** `DATABASE_URL=sqlite:////tmp/scratch.db python -m app.cli ...` keeps
   experiments out of your real `data.db`.
 
@@ -448,7 +500,9 @@ Useful loops:
   become part of the tool schema the model sees.
 - **Add an agent tool:** write a plain function in `app/tools/`, add its definition to `TOOLS` in
   `app/agent/editor.py`, and add a branch in `_Session.run()`. If the tool returns URLs the editor
-  might cite, record them with `self._see(url)`, or citations of them will be rejected. Mention
+  might cite, register them with `self._new_search_ref(_Ref(url, title, source))` and show the
+  returned id to the model, or citations of them will be rejected. Return condensed text (via
+  `self._condense`), not raw pages, to keep the context small. Mention
   when to use it in the "How to work" part of the system prompt.
 - **Change the email design:** `app/templates/email/issue.html`. Keep the table layout and inline
   styles; many email clients (Outlook, Gmail) ignore stylesheets and modern CSS. Update
@@ -473,9 +527,9 @@ Useful loops:
   changes existing ones. If you change a model in `db.py`, delete `data.db` in development, or add
   Alembic before you have production data you care about.
 - **Thread safety.** When the model makes several tool calls in one turn, `_Session.run()` runs
-  them in a thread pool (up to 8 at once). The only shared state it touches is a set of seen URLs
-  and a dict of call counts, both updated with single operations. New tools should follow the same
-  rule: no shared mutable state beyond `_see()`.
+  them in a thread pool (up to 8 at once). Shared state is limited to the id registry (new search
+  ids are assigned under a lock), the usage tracker (also locked) and a dict of call counts. New
+  tools should not add other shared mutable state.
 - **No automated tests yet.** The agent loop was verified with a fake client that replays scripted
   tool calls, which is the best place to start a test suite: it exercises tool dispatch, URL
   verification and the pipeline without spending API credits. Template rendering and the signup
