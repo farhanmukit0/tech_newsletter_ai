@@ -19,6 +19,16 @@ def _bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _database_url(raw: str | None) -> str:
+    """Default to local SQLite; point plain postgres:// URLs (Neon, Render, Heroku) at psycopg 3."""
+    if not raw:
+        return f"sqlite:///{BASE_DIR / 'data.db'}"
+    for prefix in ("postgres://", "postgresql://"):
+        if raw.startswith(prefix):
+            return "postgresql+psycopg://" + raw[len(prefix):]
+    return raw
+
+
 @dataclass(frozen=True)
 class Settings:
     # Publication
@@ -53,7 +63,7 @@ class Settings:
     outbox_dir: Path = BASE_DIR / "outbox"
 
     # Storage
-    database_url: str = os.getenv("DATABASE_URL") or f"sqlite:///{BASE_DIR / 'data.db'}"
+    database_url: str = _database_url(os.getenv("DATABASE_URL"))
 
     # Scheduling
     scheduler_enabled: bool = _bool("SCHEDULER_ENABLED", True)

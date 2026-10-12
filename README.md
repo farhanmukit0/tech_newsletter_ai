@@ -394,8 +394,31 @@ always-on container or server. Anything that can run a Docker container or a Pyt
 3. **Secrets.** Set `ANTHROPIC_API_KEY`, `RESEND_API_KEY`, `BRAVE_API_KEY` and a long random
    `ADMIN_TOKEN` in your host's secret settings. Never commit them.
 4. **Database.** SQLite is fine on a server with a persistent disk. On platforms whose disks are
-   wiped on each deploy, use Postgres: set `DATABASE_URL` and add `psycopg[binary]` to
-   `requirements.txt`.
+   wiped on each deploy, use Postgres: set `DATABASE_URL` to the `postgresql://...` URL your
+   provider gives you (the psycopg driver is already installed).
+
+### Free option: Render + Neon + GitHub Actions
+
+Costs nothing to host (you still pay for Claude, about $0.03 per issue). The repo includes a
+Render Blueprint (`render.yaml`) and a scheduled workflow (`.github/workflows/send.yml`).
+
+| Piece | Service | Why |
+|---|---|---|
+| Web app | Render free web service | Free HTTPS and custom domain. Sleeps after 15 minutes idle; the first visit after that takes about a minute. |
+| Database | Neon free Postgres | Render's free disk is wiped on every restart, and its free Postgres expires after 30 days. |
+| Schedule | GitHub Actions | A sleeping app can't run its own scheduler, so a workflow wakes it and calls `POST /cron/{daily,weekly}`. |
+
+1. **Database.** Create a project at [neon.com](https://neon.com) and copy its connection string
+   (`postgresql://...?sslmode=require`).
+2. **Web app.** In Render: **New → Blueprint**, pick this repository. It reads `render.yaml` and asks
+   for the secrets: `ANTHROPIC_API_KEY`, `RESEND_API_KEY`, `DATABASE_URL` (the Neon string),
+   `ADMIN_TOKEN` (long and random: `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+   and optionally `BRAVE_API_KEY`. Check `BASE_URL` and `EMAIL_FROM` in `render.yaml` match your domain.
+3. **Domain.** In the Render service: **Settings → Custom Domains**, add your domain and add the DNS
+   record Render shows at your registrar. Render issues the HTTPS certificate.
+4. **Schedule.** In GitHub: **Settings → Secrets and variables → Actions**, add `SITE_URL`
+   (`https://yourdomain.com`) and `ADMIN_TOKEN` (same as Render). Times are in UTC in
+   `send.yml`; run it by hand from the **Actions** tab to test.
 
 ### Option A: Docker on any server (VPS, EC2, Droplet, etc.)
 

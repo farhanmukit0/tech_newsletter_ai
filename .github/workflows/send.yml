@@ -1,0 +1,50 @@
+# Triggers the newsletter on the hosted app. Needed on hosts that sleep when idle (Render free),
+# where the app's own scheduler can't be relied on. Repo secrets: SITE_URL, ADMIN_TOKEN.
+# GitHub cron is UTC and can run some minutes late. 11:00 UTC is 7:00 New York in summer, 6:00 in winter.
+name: Send issue
+
+on:
+  schedule:
+    - cron: "0 11 * * *"   # daily
+    - cron: "0 12 * * 0"   # weekly, Sunday
+  workflow_dispatch:
+    inputs:
+      cadence:
+        description: Which issue to build and send
+        type: choice
+        options: [daily, weekly]
+        default: daily
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Pick cadence
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "cadence=${{ inputs.cadence }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 12 * * 0" ]; then
+            echo "cadence=weekly" >> "$GITHUB_OUTPUT"
+          else
+            echo "cadence=daily" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wake the app
+        run: curl -sf --retry 6 --retry-delay 20 --retry-all-errors --max-time 120 "${{ secrets.SITE_URL }}/healthz"
+
+      - name: Start the issue
+        run: |
+          curl -sf --max-time 60 -X POST \
+            -H "Authorization: Bearer ${{ secrets.ADMIN_TOKEN }}" \
+            "${{ secrets.SITE_URL }}/cron/${{ steps.pick.outputs.cadence }}"
+
+      # The build runs in the background on the server (a few minutes). Keep traffic coming so
+      # the host doesn't put the app to sleep mid-build.
+      - name: Keep the app awake while it builds
+        run: |
+          for i in $(seq 1 10); do
+            sleep 120
+            curl -s -o /dev/null --max-time 60 "${{ secrets.SITE_URL }}/healthz" || true
+          done
