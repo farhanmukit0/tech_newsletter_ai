@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from email_validator import EmailNotValidError, validate_email
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -282,6 +282,16 @@ def admin_build(token: str = Form(...), cadence: str = Form("daily"), send: str 
     else:
         _background(f"build:{cadence}", build_edition, cadence, force=True)
     return RedirectResponse(f"/admin?token={token}", status_code=303)
+
+
+@app.post("/cron/{cadence}", status_code=202)
+def cron_run(cadence: str, authorization: str | None = Header(None)):
+    """Build and send today's issue. For an external scheduler on hosts that sleep (e.g. Render free)."""
+    _require_admin((authorization or "").removeprefix("Bearer ").strip() or None)
+    if cadence not in ("daily", "weekly"):
+        raise HTTPException(404, "Unknown cadence")
+    started = _background(f"run:{cadence}", run_issue, cadence)
+    return {"cadence": cadence, "started": started}
 
 
 @app.post("/admin/send/{edition_id}")
